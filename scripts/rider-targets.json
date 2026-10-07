@@ -5,6 +5,18 @@
     "url": "https://download.jetbrains.com/rider/JetBrains.Rider-2026.1.3.tar.gz",
     "sha256": "7f43eb95dffc33b5413d81d0c11441fd6ce04db4c2a6a2ceb7e0ddf5f6879136"
   },
+  "261-latest": {
+    "version": "2026.1.5.2",
+    "build": "261.27258.81",
+    "url": "https://download.jetbrains.com/rider/JetBrains.Rider-2026.1.5.2.tar.gz",
+    "sha256": "b89b31b8790c541cdaf3e76bcff55d04c9c734d6be65c89d1c2a4fbc5cf81077"
+  },
+  "262-first": {
+    "version": "2026.2",
+    "build": "262.8665.328",
+    "url": "https://download.jetbrains.com/rider/JetBrains.Rider-2026.2.tar.gz",
+    "sha256": "eebbc49e29852496cbc7f6399eb47b56e8a95fc921c4dae7c05cca6b2f6d22a7"
+  },
   "262": {
     "version": "2026.2.3.1",
     "build": "262.10968.170",

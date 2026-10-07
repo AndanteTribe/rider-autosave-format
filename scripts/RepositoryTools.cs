@@ -65,6 +65,18 @@ public static class ReleaseMetadata
                 errors.Add($"Set {key} in gradle.properties");
             }
         }
+        if (!Regex.IsMatch(Value("pluginVersion"), @"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z",
+                RegexOptions.CultureInvariant))
+        {
+            errors.Add("pluginVersion must be a plain major.minor.patch release version");
+        }
+        if (!Version.TryParse(Value("pluginSinceBuild"), out var since) ||
+            !Version.TryParse(Value("pluginUntilBuild"), out var until) || since > until ||
+            !Regex.IsMatch(Value("pluginSinceBuild"), @"\A\d{3}\.\d+\.\d+\z") ||
+            !Regex.IsMatch(Value("pluginUntilBuild"), @"\A\d{3}\.\d+\.\d+\z"))
+        {
+            errors.Add("Set ordered, exact pluginSinceBuild and pluginUntilBuild compatibility bounds");
+        }
         if (Value("pluginVendorEmail") is { Length: > 0 } email &&
             !Regex.IsMatch(email, @"\A[^\s@]+@[^\s@]+\.[^\s@]+\z", RegexOptions.CultureInvariant))
         {
@@ -112,11 +124,12 @@ public static class RiderSdk
         {
             throw new InvalidDataException("No Rider targets configured");
         }
-        foreach (var (branch, target) in targets)
+        foreach (var (key, target) in targets)
         {
             ValidateTarget(target);
-            Require(Regex.IsMatch(branch, @"\A\d{3}\z") && target.Build.StartsWith(branch + ".", StringComparison.Ordinal),
-                "Rider branch and exact build must match");
+            var branch = key.Split('-')[0];
+            Require(Regex.IsMatch(key, @"\A\d{3}(?:-[a-z]+)?\z") && target.Build.StartsWith(branch + ".", StringComparison.Ordinal),
+                "Rider target key and exact build must match");
         }
         return targets;
     }
@@ -324,12 +337,17 @@ public static class PluginPackage
             throw new InvalidDataException($"Missing property {key}");
         Require(descriptor.Element("id")?.Value == Value("pluginId"), "Unexpected plugin ID");
         Require(descriptor.Element("name")?.Value == Value("pluginName"), "Unexpected plugin name");
-        Require(descriptor.Element("version")?.Value == Value("pluginVersion") + "." + build, "Unexpected per-SDK version");
+        Require(descriptor.Element("version")?.Value == Value("pluginVersion"), "Packaged version must match pluginVersion exactly");
         Require(descriptor.Element("vendor")?.Value == Value("pluginVendor"), "Unexpected publisher");
         var bounds = descriptor.Element("idea-version");
         Require(bounds is not null && bounds.Attributes().Count() == 3 &&
-            bounds.Attribute("since-build")?.Value == build && bounds.Attribute("until-build")?.Value == build &&
-            bounds.Attribute("strict-until-build")?.Value == build, "Descriptor must have all three exact compatibility bounds");
+            bounds.Attribute("since-build")?.Value == Value("pluginSinceBuild") &&
+            bounds.Attribute("until-build")?.Value == Value("pluginUntilBuild") &&
+            bounds.Attribute("strict-until-build")?.Value == Value("pluginUntilBuild"),
+            "Descriptor must match the declared compatibility range and strict upper bound");
+        Require(Version.TryParse(Value("pluginSinceBuild"), out var since) &&
+            Version.TryParse(Value("pluginUntilBuild"), out var until) && Version.TryParse(build, out var target) &&
+            since <= target && target <= until, "Rider build is outside the supported range");
         Require(descriptor.Element("incompatible-with")?.Value == "local.rider.autosave.format", "Missing old-plugin migration guard");
         Require(descriptor.Element("depends")?.Value == "com.intellij.modules.rider", "Missing Rider module dependency");
         Require(Encoding.UTF8.GetString(ReadRequiredEntry(jar, "META-INF/LICENSE", 1024 * 1024))

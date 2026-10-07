@@ -1,15 +1,14 @@
 <idea-plugin>
     <description><![CDATA[
-        <p>Opt-in C# formatting after automatic saves in JetBrains Rider, using the built-in Reformat Code profile.</p>
-        <p>Enable formatting for each project from Tools → Enable Native Auto-save Formatting (Preview).
+        <p>Opt-in C# formatting after automatic or manual saves in JetBrains Rider, using the built-in Reformat Code profile.</p>
+        <p>Enable formatting for each project from Tools → Enable Native Auto-save Formatting.
         It is disabled by default for new projects. The plugin formats after the initial save, so file watchers may observe more than one write.</p>
-        <p>This preview is restricted to the exact Rider build used to compile it. Native formatting and editing interactions require manual validation before release.</p>
+        <p>Compatible with the bounded Rider build range listed for this release.</p>
     ]]></description>
     <change-notes><![CDATA[
-        <p>Preview: preserves new saves during in-flight formatting, checks stable saved generations, and uses non-deprecated blocking read access.</p>
-        <p>Public identity and exact-build variants added. Remove or disable the previous local preview before installing.</p>
+        <p>Initial release: per-project C# formatting after automatic or manual saves using Rider's built-in Reformat Code profile.</p>
     ]]></change-notes>
-    <idea-version strict-until-build="${riderBuild}" />
+    <idea-version strict-until-build="${untilRiderBuild}" />
     <depends>com.intellij.modules.rider</depends>
     <incompatible-with>local.rider.autosave.format</incompatible-with>
     <applicationListeners>
@@ -18,7 +17,7 @@
     </applicationListeners>
     <actions>
         <action id="LocalRiderAutosave.Toggle" class="local.rider.autosave.ToggleFormattingAction"
-                text="Enable Native Auto-save Formatting (Preview)"
+                text="Enable Native Auto-save Formatting"
                 description="Enable C# auto-save formatting for this project only">
             <add-to-group group-id="ToolsMenu" anchor="last" />
         </action>

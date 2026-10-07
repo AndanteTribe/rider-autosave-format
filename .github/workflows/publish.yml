@@ -5,22 +5,22 @@ on:
   workflow_dispatch:
     inputs:
       base_version:
-        description: Exact pluginVersion from gradle.properties
+        description: Exact plain release version in pluginVersion (0.1.0)
         required: true
         type: string
       channel:
         description: Marketplace channel (default is publicly discoverable stable)
         required: true
         type: choice
-        default: alpha
-        options: [alpha, beta, default]
+        default: default
+        options: [default, alpha, beta]
       runtime_tested:
-        description: I completed manual IDE validation on BOTH target Rider builds on this commit
+        description: I completed manual IDE validation on ALL FOUR target Rider builds on this commit
         required: true
         type: boolean
         default: false
       publish:
-        description: Upload BOTH exact-build variants to the existing Marketplace listing
+        description: Upload the single shared ZIP to the existing Marketplace listing
         required: true
         type: boolean
         default: false
@@ -54,20 +54,18 @@ jobs:
           RUNTIME_TESTED: ${{ inputs.runtime_tested }}
           BASE_VERSION: ${{ inputs.base_version }}
         run: |
-          test "$PUBLISH" = true && test "$RUNTIME_TESTED" = true
+          set -euo pipefail
+          test "$PUBLISH" = true || { echo 'Explicit publication confirmation is required.'; exit 1; }
+          test "$RUNTIME_TESTED" = true || { echo 'Manual runtime validation on all four Rider builds is required.'; exit 1; }
           actual="$(sed -n 's/^pluginVersion=//p' gradle.properties)"
           test "$BASE_VERSION" = "$actual" || { echo 'Requested version does not match this commit.'; exit 1; }
           dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- check-release-metadata
 
-  verify:
-    name: Verify Rider ${{ matrix.target }}
+  build:
+    name: Build shared release candidate
     needs: approve
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ['261', '262']
     steps:
       # ghasec-ignore: unpinned-action
       - uses: AndanteTribe/Actions/actions/checkout@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
@@ -86,38 +84,103 @@ jobs:
           dependency-graph: disabled
       - name: Build repository tools
         run: dotnet build scripts/repository-tools.cs --configuration Release
-      - name: Download the checksum-pinned SDK
-        env:
-          TARGET: ${{ matrix.target }}
-        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider "$TARGET" "$RUNNER_TEMP/rider-$TARGET" --github-env
-      - name: Build and verify the release candidate without secrets
+      - name: Download the checksum-pinned minimum SDK
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider 261 "$RUNNER_TEMP/rider-261" --github-env
+      - name: Build and check the shared release candidate once without secrets
         run: bash ./gradlew --no-daemon clean releaseCheck -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD"
-      - name: Record exact candidate hashes
-        run: (cd build/distributions && sha256sum ./*.zip > SHA256SUMS)
-      - name: Upload verified candidate
+      - name: Check and hash the single shared package
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(build/distributions/*.zip)
+          test "${#archives[@]}" -eq 1 || { echo 'Expected exactly one shared plugin ZIP.'; exit 1; }
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip "${archives[0]}" "$RIDER_BUILD"
+          (cd build/distributions && sha256sum -- ./*.zip > SHA256SUMS)
+      - name: Upload shared candidate for the verification matrix
         # ghasec-ignore: unpinned-action
         uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
-          name: release-rd-${{ matrix.target }}
+          name: release-candidate
           path: |
             build/distributions/*.zip
             build/distributions/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
-      - name: Upload verification reports
+      - name: Upload release build and test reports
         if: always()
         # ghasec-ignore: unpinned-action
         uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
-          name: release-reports-rd-${{ matrix.target }}
+          name: release-reports-build
           path: |
             build/reports/
             build/test-results/
           if-no-files-found: ignore
           retention-days: 30
 
+  verify:
+    name: Verify shared ZIP on Rider ${{ matrix.target }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ['261', '261-latest', '262-first', '262']
+    steps:
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/checkout@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/setup-dotnet@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
+        with:
+          global-json-file: global.json
+      - uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
+        with:
+          cache-provider: basic
+          cache-read-only: true
+          dependency-graph: disabled
+      - name: Build repository tools
+        run: dotnet build scripts/repository-tools.cs --configuration Release
+      - name: Download the checksum-pinned verification SDK
+        env:
+          TARGET: ${{ matrix.target }}
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider "$TARGET" "$RUNNER_TEMP/rider-$TARGET" --github-env
+      - name: Download the same shared candidate from this workflow run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-candidate
+          path: candidate
+      - name: Check candidate hash and metadata before verification
+        id: candidate
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(candidate/*.zip)
+          test "${#archives[@]}" -eq 1 || { echo 'Expected exactly one shared plugin ZIP.'; exit 1; }
+          (cd candidate && sha256sum --check --strict SHA256SUMS)
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip "${archives[0]}" "$RIDER_BUILD"
+          printf 'PLUGIN_ARCHIVE=%s/%s\n' "$PWD" "${archives[0]}" >> "$GITHUB_ENV"
+      - name: Verify the downloaded ZIP without rebuilding it
+        run: bash ./gradlew --no-daemon verifyPlugin -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD" -PverificationArchive="$PLUGIN_ARCHIVE"
+      - name: Check candidate hash after verification
+        if: always() && steps.candidate.outcome == 'success'
+        run: (cd candidate && sha256sum --check --strict SHA256SUMS)
+      - name: Upload verification reports
+        if: always()
+        # ghasec-ignore: unpinned-action
+        uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
+        with:
+          name: release-reports-rd-${{ matrix.target }}
+          path: build/reports/
+          if-no-files-found: ignore
+          retention-days: 30
+
   publish:
-    name: Upload verified Marketplace updates
+    name: Upload the verified Marketplace update
     needs: [approve, verify]
     # Configure REQUIRED REVIEWERS and default-branch-only deployment rules first.
     # Naming an Environment does not create those protection settings.
@@ -133,32 +196,38 @@ jobs:
           global-json-file: global.json
       - name: Build repository tools only
         run: dotnet build scripts/repository-tools.cs --configuration Release
-      - name: Download the exact candidates from this workflow run
+      - name: Download the exact shared candidate from this workflow run
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: release-rd-*
-          path: candidates
-      - name: Recheck both candidate hashes and descriptors before any upload
+          name: release-candidate
+          path: candidate
+      - name: Recheck the candidate hash and descriptor at both compatibility endpoints
         run: |
-          (cd candidates/release-rd-261 && sha256sum --check SHA256SUMS)
-          (cd candidates/release-rd-262 && sha256sum --check SHA256SUMS)
-          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip candidates/release-rd-261/*.zip 261.25134.178
-          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip candidates/release-rd-262/*.zip 262.10968.170
-      - name: Upload the authorized updates using the official Marketplace API
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(candidate/*.zip)
+          test "${#archives[@]}" -eq 1 || { echo 'Expected exactly one shared plugin ZIP.'; exit 1; }
+          (cd candidate && sha256sum --check --strict SHA256SUMS)
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip "${archives[0]}" 261.25134.178
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip "${archives[0]}" 262.10968.170
+      - name: Upload the single authorized update using the official Marketplace API
         env:
           PUBLISH_TOKEN: ${{ secrets.MARKETPLACE_PUBLISH_TOKEN }}
           MARKETPLACE_CHANNEL: ${{ inputs.channel }}
         run: |
+          set -euo pipefail
           test -n "$PUBLISH_TOKEN" || { echo 'Missing marketplace Environment secret.'; exit 1; }
+          shopt -s nullglob
+          archives=(candidate/*.zip)
+          test "${#archives[@]}" -eq 1 || { echo 'Expected exactly one shared plugin ZIP.'; exit 1; }
+          (cd candidate && sha256sum --check --strict SHA256SUMS)
           plugin_id="$(sed -n 's/^pluginId=//p' gradle.properties)"
           channel="$MARKETPLACE_CHANNEL"
           if [ "$channel" = default ]; then channel=''; fi
           # Do not retry POST automatically: an uncertain result may already be accepted.
-          for archive in candidates/release-rd-261/*.zip candidates/release-rd-262/*.zip; do
-            curl --silent --show-error --fail-with-body \
-              --header "Authorization: Bearer $PUBLISH_TOKEN" \
-              --form-string "xmlId=$plugin_id" \
-              --form "file=@$archive" \
-              --form-string "channel=$channel" \
-              https://plugins.jetbrains.com/api/updates/upload
-          done
+          curl --silent --show-error --fail-with-body \
+            --header "Authorization: Bearer $PUBLISH_TOKEN" \
+            --form-string "xmlId=$plugin_id" \
+            --form "file=@${archives[0]}" \
+            --form-string "channel=$channel" \
+            https://plugins.jetbrains.com/api/updates/upload

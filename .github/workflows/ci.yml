@@ -4,15 +4,6 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-    inputs:
-      release_ready:
-        description: Also require complete public release metadata
-        type: boolean
-        default: false
-      runtime_tested:
-        description: I completed manual IDE validation on both exact Rider builds on this commit
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -45,24 +36,14 @@ jobs:
         run: dotnet format whitespace scripts --folder --verify-no-changes
       - name: Check repository helpers
         run: dotnet run --file scripts/test-repository-tools.cs --configuration Release
-      - name: Check public release prerequisites
-        if: github.event_name == 'workflow_dispatch' && inputs.release_ready
-        env:
-          RUNTIME_TESTED: ${{ inputs.runtime_tested }}
-        shell: bash
-        run: |
-          test "$RUNTIME_TESTED" = true || { echo 'Complete manual IDE validation on both target builds first.'; exit 1; }
-          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- check-release-metadata
+      - name: Check public release metadata
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- check-release-metadata
 
   build:
-    name: Rider ${{ matrix.target }}
+    name: Build shared Rider plugin
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ['261', '262']
     steps:
       # ghasec-ignore: unpinned-action
       - uses: AndanteTribe/Actions/actions/checkout@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
@@ -81,32 +62,97 @@ jobs:
           dependency-graph: disabled
       - name: Build repository tools
         run: dotnet build scripts/repository-tools.cs --configuration Release
-      - name: Download the checksum-pinned SDK
-        env:
-          TARGET: ${{ matrix.target }}
-        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider "$TARGET" "$RUNNER_TEMP/rider-$TARGET" --github-env
-      - name: Compile, test and package
+      - name: Download the checksum-pinned minimum SDK
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider 261 "$RUNNER_TEMP/rider-261" --github-env
+      - name: Compile, test and package once with the minimum supported SDK
         run: bash ./gradlew --no-daemon clean check buildPlugin -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD"
-      - name: Check exact package contents
-        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip build/distributions/*.zip "$RIDER_BUILD"
-      - name: Verify against the exact Rider SDK
-        run: bash ./gradlew --no-daemon verifyPlugin -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD"
-      - name: Upload verified plugin ZIP
+      - name: Check and hash the single shared package
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(build/distributions/*.zip)
+          test "${#archives[@]}" -eq 1 || { echo 'Expected exactly one shared plugin ZIP.'; exit 1; }
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip "${archives[0]}" "$RIDER_BUILD"
+          (cd build/distributions && sha256sum -- ./*.zip > SHA256SUMS)
+      - name: Upload shared candidate for the verification matrix
         # ghasec-ignore: unpinned-action
         uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
-          name: plugin-rd-${{ matrix.target }}
-          path: build/distributions/*.zip
+          name: plugin-candidate
+          path: |
+            build/distributions/*.zip
+            build/distributions/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
-      - name: Upload test and verifier reports
+      - name: Upload build and test reports
+        if: always()
+        # ghasec-ignore: unpinned-action
+        uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
+        with:
+          name: reports-build
+          path: |
+            build/reports/
+            build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  verify:
+    name: Verify shared ZIP on Rider ${{ matrix.target }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ['261', '261-latest', '262-first', '262']
+    steps:
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/checkout@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/setup-dotnet@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
+        with:
+          global-json-file: global.json
+      - uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
+        with:
+          cache-provider: basic
+          cache-read-only: true
+          dependency-graph: disabled
+      - name: Build repository tools
+        run: dotnet build scripts/repository-tools.cs --configuration Release
+      - name: Download the checksum-pinned verification SDK
+        env:
+          TARGET: ${{ matrix.target }}
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider "$TARGET" "$RUNNER_TEMP/rider-$TARGET" --github-env
+      - name: Download the same shared candidate from this workflow run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: plugin-candidate
+          path: candidate
+      - name: Check candidate hash and metadata before verification
+        id: candidate
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(candidate/*.zip)
+          test "${#archives[@]}" -eq 1 || { echo 'Expected exactly one shared plugin ZIP.'; exit 1; }
+          (cd candidate && sha256sum --check --strict SHA256SUMS)
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip "${archives[0]}" "$RIDER_BUILD"
+          printf 'PLUGIN_ARCHIVE=%s/%s\n' "$PWD" "${archives[0]}" >> "$GITHUB_ENV"
+      - name: Verify the downloaded ZIP without rebuilding it
+        run: bash ./gradlew --no-daemon verifyPlugin -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD" -PverificationArchive="$PLUGIN_ARCHIVE"
+      - name: Check candidate hash after verification
+        if: always() && steps.candidate.outcome == 'success'
+        run: (cd candidate && sha256sum --check --strict SHA256SUMS)
+      - name: Upload verifier reports
         if: always()
         # ghasec-ignore: unpinned-action
         uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
           name: reports-rd-${{ matrix.target }}
-          path: |
-            build/reports/
-            build/test-results/
+          path: build/reports/
           if-no-files-found: ignore
           retention-days: 14

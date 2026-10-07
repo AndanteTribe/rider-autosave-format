@@ -10,9 +10,11 @@ plugins {
 
 group = "io.github.andantetribe"
 
+val sinceRiderBuild = providers.gradleProperty("pluginSinceBuild").get()
+val untilRiderBuild = providers.gradleProperty("pluginUntilBuild").get()
 val targetRiderBuild = providers.gradleProperty("riderBuild")
     .orElse(providers.environmentVariable("RIDER_BUILD"))
-    .getOrElse("261.25134.178")
+    .getOrElse(sinceRiderBuild)
 @Suppress("UNCHECKED_CAST")
 val targets = JsonSlurper().parse(file("scripts/rider-targets.json")) as Map<String, Map<String, String>>
 require(targets.values.any { it["build"] == targetRiderBuild }) {
@@ -29,8 +31,11 @@ require(actualRiderBuild == targetRiderBuild && productInfo["buildNumber"] == ta
     "SDK is ${productInfo["productCode"]}-$actualRiderBuild, target is RD-$targetRiderBuild. Select the matching SDK."
 }
 
-// Marketplace requires a distinct plugin version for each uploaded artifact.
-version = "${providers.gradleProperty("pluginVersion").get()}.$targetRiderBuild"
+val pluginVersion = providers.gradleProperty("pluginVersion").get()
+require(Regex("(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)").matches(pluginVersion)) {
+    "pluginVersion must be a plain major.minor.patch release version."
+}
+version = pluginVersion
 
 repositories {
     mavenCentral()
@@ -64,7 +69,7 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEa
 tasks.test { useJUnitPlatform() }
 
 intellijPlatform {
-    // No forms/configurable UI; keep the already-tested production bytecode path.
+    // The plugin has no forms or searchable settings.
     instrumentCode = false
     buildSearchableOptions = false
     pluginConfiguration {
@@ -77,13 +82,13 @@ intellijPlatform {
             providers.gradleProperty("pluginVendorEmail").orNull?.takeIf { it.isNotBlank() }?.let { email = it }
         }
         ideaVersion {
-            sinceBuild = targetRiderBuild
-            untilBuild = targetRiderBuild
+            sinceBuild = sinceRiderBuild
+            untilBuild = untilRiderBuild
         }
     }
     publishing {
         token = providers.environmentVariable("PUBLISH_TOKEN")
-        channels = providers.gradleProperty("marketplaceChannel").map { listOf(it) }.orElse(listOf("alpha"))
+        channels = providers.gradleProperty("marketplaceChannel").map { listOf(it) }.orElse(listOf("default"))
     }
     pluginVerification {
         // Local targets avoid resolving a different IDE or downloading it twice.
@@ -96,8 +101,8 @@ intellijPlatform {
 val preparePluginDescriptor by tasks.registering(Copy::class) {
     from("src/main/resources/META-INF/plugin.xml")
     into(layout.buildDirectory.dir("generated/pluginDescriptor"))
-    inputs.property("targetRiderBuild", targetRiderBuild)
-    expand("riderBuild" to targetRiderBuild)
+    inputs.property("untilRiderBuild", untilRiderBuild)
+    expand("untilRiderBuild" to untilRiderBuild)
 }
 tasks.patchPluginXml {
     dependsOn(preparePluginDescriptor)
@@ -112,9 +117,20 @@ tasks.withType<AbstractArchiveTask>().configureEach {
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
 }
-tasks.buildPlugin { dependsOn(tasks.test) }
+tasks.buildPlugin {
+    dependsOn(tasks.test)
+    doFirst {
+        require(targetRiderBuild == sinceRiderBuild) {
+            "Build the shared plugin with the minimum supported SDK: $sinceRiderBuild."
+        }
+    }
+}
 // All required modules are bundled in the exact local Rider SDK.
-tasks.verifyPlugin { offline.set(true) }
+tasks.verifyPlugin {
+    offline.set(true)
+    // CI verifies the same downloaded artifact against every SDK without rebuilding it.
+    providers.gradleProperty("verificationArchive").orNull?.let { archiveFile.set(file(it)) }
+}
 
 val dotnet = providers.gradleProperty("dotnetExecutable").getOrElse("dotnet")
 val buildRepositoryTools by tasks.registering(Exec::class) {

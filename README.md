@@ -10,14 +10,16 @@ Automatically format C# after automatic or manual saves in JetBrains Rider, usin
 
 ## Requirements
 
-The following exact Rider builds are supported:
+One plugin package covers Rider **2026.1.3 through 2026.2.3.1**, from build `RD-261.25134.178` through `RD-262.10968.170`. Binary compatibility checks cover:
 
-| JetBrains Rider | Required build |
+| JetBrains Rider | Checked build |
 | --- | --- |
 | 2026.1.3 | `RD-261.25134.178` |
+| 2026.1.5.2 | `RD-261.27258.81` |
+| 2026.2 | `RD-262.8665.328` |
 | 2026.2.3.1 | `RD-262.10968.170` |
 
-Check your build in **Help → About**. Other builds, including other patch releases, are not supported. No separate JDK, .NET SDK, or Gradle installation is required.
+Check your build in **Help → About**. Builds outside this range are not supported. No separate JDK, .NET SDK, or Gradle installation is required.
 
 ## Installation
 
@@ -29,7 +31,7 @@ Check your build in **Help → About**. Other builds, including other patch rele
 ## Usage
 
 1. Open your C# project.
-2. Enable automatic formatting from the **Tools** menu.
+2. Choose **Tools → Enable Native Auto-save Formatting**.
 3. Edit a C# file and let Rider save automatically, or save it manually.
 
 Use the same Tools menu item to turn formatting off. The setting is saved per project and is off by default for new projects.

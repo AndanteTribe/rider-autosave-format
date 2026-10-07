@@ -68,13 +68,13 @@ internal static class RepositoryTests
 
     private static void RegisterMetadataTests()
     {
-        // Preserve all eleven cases from the previous Python regression suite.
         Add("targets_have_exact_builds_and_checksums", () =>
         {
             var targets = RiderSdk.ReadTargets(Path.Combine(s_root, "scripts", "rider-targets.json"));
-            True(targets.Keys.ToHashSet().SetEquals(["261", "262"]), "Expected both supported SDK branches");
-            foreach (var (branch, target) in targets)
+            True(targets.Keys.ToHashSet().SetEquals(["261", "261-latest", "262-first", "262"]), "Expected all four compatibility-check targets");
+            foreach (var (key, target) in targets)
             {
+                var branch = key.Split('-')[0];
                 True(Regex.IsMatch(target.Build, $@"^{branch}\.\d+\.\d+$"), "Build must be exact");
                 True(Regex.IsMatch(target.Sha256, "^[0-9a-f]{64}$"), "Expected a pinned SHA-256");
                 Equal($"https://download.jetbrains.com/rider/JetBrains.Rider-{target.Version}.tar.gz", target.Url);
@@ -135,12 +135,38 @@ internal static class RepositoryTests
             values["pluginId"] = "com.example.formatter";
             True(ReleaseMetadata.Validate(values, s_root).Count > 0, "Development IDs must fail");
         });
-        Add("variant_versions_are_unique", () =>
+        foreach (var suffix in new[] { ".261.25134.178", "-rc.1", "+build.1" })
+        {
+            Add($"release_rejects_version_suffix_{suffix}", () =>
+            {
+                var values = PublicMetadata();
+                values["pluginVersion"] += suffix;
+                True(ReleaseMetadata.Validate(values, s_root).Count > 0, "Release versions must not have SDK or prerelease suffixes");
+            });
+        }
+        foreach (var version in new[] { "", "0.1", "v0.1.0", "00.1.0", "0.1.0\n" })
+        {
+            Add($"release_rejects_malformed_version_{version}", () =>
+            {
+                var values = PublicMetadata();
+                values["pluginVersion"] = version;
+                True(ReleaseMetadata.Validate(values, s_root).Count > 0, "A plain release version is required");
+            });
+        }
+        foreach (var bound in new[] { "pluginSinceBuild", "pluginUntilBuild" })
+        {
+            Add($"release_rejects_inexact_compatibility_{bound}", () =>
+            {
+                var values = PublicMetadata();
+                values[bound] = "262.*";
+                True(ReleaseMetadata.Validate(values, s_root).Count > 0, "Compatibility bounds must be exact");
+            });
+        }
+        Add("release_rejects_reversed_compatibility_range", () =>
         {
             var values = PublicMetadata();
-            var targets = RiderSdk.ReadTargets(Path.Combine(s_root, "scripts", "rider-targets.json"));
-            var versions = targets.Values.Select(target => values["pluginVersion"] + "." + target.Build).ToHashSet();
-            Equal(targets.Count, versions.Count);
+            (values["pluginSinceBuild"], values["pluginUntilBuild"]) = (values["pluginUntilBuild"], values["pluginSinceBuild"]);
+            True(ReleaseMetadata.Validate(values, s_root).Count > 0, "Compatibility bounds must be ordered");
         });
         Add("properties_preserve_equals_comments_and_unicode", () =>
         {
@@ -355,7 +381,7 @@ internal static class RepositoryTests
 
     private static void RegisterPackageTests()
     {
-        Add("package_accepts_java21_exact_bounds_identity_license_icon_and_rider_dependency", () =>
+        Add("package_accepts_java21_bounded_range_identity_license_icon_and_rider_dependency", () =>
         {
             using var temp = new TempDirectory();
             var fixture = new PackageFixture();
@@ -371,6 +397,31 @@ internal static class RepositoryTests
             InvalidDescriptor($"package_rejects_inexact_{bound}", xml => xml.Root!.Element("idea-version")!.SetAttributeValue(bound, "261.*"));
         }
         InvalidDescriptor("package_rejects_extra_compatibility_attributes", xml => xml.Root!.Element("idea-version")!.SetAttributeValue("unexpected", "true"));
+        InvalidDescriptor("package_rejects_numeric_sdk_suffix", xml => xml.Root!.Element("version")!.Value =
+            PublicMetadata()["pluginVersion"] + "." + s_target.Build);
+        InvalidDescriptor("package_rejects_prerelease_version", xml => xml.Root!.Element("version")!.Value =
+            PublicMetadata()["pluginVersion"] + "-rc." + s_target.Build);
+        InvalidDescriptor("package_rejects_sdk_version_metadata", xml => xml.Root!.Element("version")!.Value =
+            PublicMetadata()["pluginVersion"] + "+" + s_target.Build);
+        Add("package_accepts_same_artifact_at_both_range_endpoints", () =>
+        {
+            using var temp = new TempDirectory();
+            var fixture = new PackageFixture();
+            var path = fixture.Write(temp.File("plugin.zip"));
+            foreach (var bound in new[] { "pluginSinceBuild", "pluginUntilBuild" })
+            {
+                Equal(2, PluginPackage.Verify(path, fixture.Properties[bound], fixture.Properties));
+            }
+        });
+        foreach (var build in new[] { "261.1.1", "262.10968.171", "263.1.1" })
+        {
+            Add($"package_rejects_out_of_range_build_{build}", () =>
+            {
+                using var temp = new TempDirectory();
+                var fixture = new PackageFixture();
+                Invalid(() => PluginPackage.Verify(fixture.Write(temp.File("plugin.zip")), build, fixture.Properties));
+            });
+        }
         InvalidDescriptor("package_requires_rider_dependency", xml => xml.Root!.Element("depends")!.Remove());
         InvalidDescriptor("package_rejects_wrong_rider_dependency", xml => xml.Root!.Element("depends")!.Value = "com.intellij.modules.platform");
         InvalidDescriptor("package_requires_old_plugin_migration_guard", xml => xml.Root!.Element("incompatible-with")!.Remove());
@@ -722,10 +773,11 @@ internal static class RepositoryTests
             var xml = new XElement("idea-plugin",
                 new XElement("id", Properties["pluginId"]),
                 new XElement("name", Properties["pluginName"]),
-                new XElement("version", Properties["pluginVersion"] + "." + s_target.Build),
+                new XElement("version", Properties["pluginVersion"]),
                 new XElement("vendor", Properties["pluginVendor"]),
-                new XElement("idea-version", new XAttribute("since-build", s_target.Build),
-                    new XAttribute("until-build", s_target.Build), new XAttribute("strict-until-build", s_target.Build)),
+                new XElement("idea-version", new XAttribute("since-build", Properties["pluginSinceBuild"]),
+                    new XAttribute("until-build", Properties["pluginUntilBuild"]),
+                    new XAttribute("strict-until-build", Properties["pluginUntilBuild"])),
                 new XElement("depends", "com.intellij.modules.rider"),
                 new XElement("incompatible-with", "local.rider.autosave.format"));
             Jar.Add(new("META-INF/plugin.xml", Encoding.UTF8.GetBytes(xml.ToString())));
