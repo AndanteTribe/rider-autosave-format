@@ -31,12 +31,12 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-latest]
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/checkout@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
       - name: Validate Gradle Wrapper before running it
         uses: gradle/actions/wrapper-validation@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/setup-dotnet@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
           global-json-file: global.json
       - name: Build repository tools
@@ -64,14 +64,14 @@ jobs:
       matrix:
         target: ['261', '262']
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/checkout@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
           java-version: '25'
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      # ghasec-ignore: unpinned-action
+      - uses: AndanteTribe/Actions/actions/setup-dotnet@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
           global-json-file: global.json
       - uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
@@ -92,7 +92,8 @@ jobs:
       - name: Verify against the exact Rider SDK
         run: bash ./gradlew --no-daemon verifyPlugin -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD"
       - name: Upload verified plugin ZIP
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # ghasec-ignore: unpinned-action
+        uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
           name: plugin-rd-${{ matrix.target }}
           path: build/distributions/*.zip
@@ -100,7 +101,8 @@ jobs:
           retention-days: 14
       - name: Upload test and verifier reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # ghasec-ignore: unpinned-action
+        uses: AndanteTribe/Actions/actions/upload-artifact@main # zizmor: ignore[unpinned-uses] organization-owned action intentionally tracks @main
         with:
           name: reports-rd-${{ matrix.target }}
           path: |
