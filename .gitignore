@@ -1,16 +1,39 @@
-# Compiled class file
-*.class
+# Build output and IDE state
+.gradle/
+.kotlin/
+.intellijPlatform/
+build/
+out/
+bin/
+obj/
+.vs/
+.idea/
+*.iml
+*.user
+*.suo
 
-# Log file
+# Local SDKs, downloads, test projects and logs
+.local/
 *.log
+.DS_Store
+Thumbs.db
 
-# BlueJ files
+# Credentials and local overrides
+.env
+.env.*
+!.env.example
+local.properties
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Additional Java/Kotlin exclusions from the initial repository
+*.class
 *.ctxt
-
-# Mobile Tools for Java (J2ME)
 .mtj.tmp/
-
-# Package Files #
 *.jar
 *.war
 *.nar
@@ -18,10 +41,8 @@
 *.zip
 *.tar.gz
 *.rar
-
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
 
-# Kotlin Gradle plugin data, see https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects
-.kotlin/
+# Gradle Wrapper is deliberately committed (including its bootstrap JAR).
+!gradle/wrapper/gradle-wrapper.jar

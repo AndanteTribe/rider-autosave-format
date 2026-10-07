@@ -1,0 +1,110 @@
+name: Build and verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_ready:
+        description: Also require complete public release metadata
+        type: boolean
+        default: false
+      runtime_tested:
+        description: I completed manual IDE validation on both exact Rider builds on this commit
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate repository (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Validate Gradle Wrapper before running it
+        uses: gradle/actions/wrapper-validation@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Build repository tools
+        run: dotnet build scripts/repository-tools.cs --configuration Release
+      - name: Check C# whitespace conventions
+        run: dotnet format whitespace scripts --folder --verify-no-changes
+      - name: Check repository helpers
+        run: dotnet run --file scripts/test-repository-tools.cs --configuration Release
+      - name: Check public release prerequisites
+        if: github.event_name == 'workflow_dispatch' && inputs.release_ready
+        env:
+          RUNTIME_TESTED: ${{ inputs.runtime_tested }}
+        shell: bash
+        run: |
+          test "$RUNTIME_TESTED" = true || { echo 'Complete manual IDE validation on both target builds first.'; exit 1; }
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- check-release-metadata
+
+  build:
+    name: Rider ${{ matrix.target }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ['261', '262']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
+        with:
+          cache-provider: basic
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          dependency-graph: disabled
+      - name: Build repository tools
+        run: dotnet build scripts/repository-tools.cs --configuration Release
+      - name: Download the checksum-pinned SDK
+        env:
+          TARGET: ${{ matrix.target }}
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider "$TARGET" "$RUNNER_TEMP/rider-$TARGET" --github-env
+      - name: Compile, test and package
+        run: bash ./gradlew --no-daemon clean check buildPlugin -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD"
+      - name: Check exact package contents
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip build/distributions/*.zip "$RIDER_BUILD"
+      - name: Verify against the exact Rider SDK
+        run: bash ./gradlew --no-daemon verifyPlugin -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD"
+      - name: Upload verified plugin ZIP
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-rd-${{ matrix.target }}
+          path: build/distributions/*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test and verifier reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-rd-${{ matrix.target }}
+          path: |
+            build/reports/
+            build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14

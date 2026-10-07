@@ -1,0 +1,162 @@
+name: Publish Marketplace update
+
+# This is for updates to an EXISTING Marketplace listing, after manual registration.
+on:
+  workflow_dispatch:
+    inputs:
+      base_version:
+        description: Exact pluginVersion from gradle.properties
+        required: true
+        type: string
+      channel:
+        description: Marketplace channel (default is publicly discoverable stable)
+        required: true
+        type: choice
+        default: alpha
+        options: [alpha, beta, default]
+      runtime_tested:
+        description: I completed manual IDE validation on BOTH target Rider builds on this commit
+        required: true
+        type: boolean
+        default: false
+      publish:
+        description: Upload BOTH exact-build variants to the existing Marketplace listing
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-publication
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    name: Check manual request
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Build repository tools
+        run: dotnet build scripts/repository-tools.cs --configuration Release
+      - name: Require explicit publication and runtime-test confirmation
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          RUNTIME_TESTED: ${{ inputs.runtime_tested }}
+          BASE_VERSION: ${{ inputs.base_version }}
+        run: |
+          test "$PUBLISH" = true && test "$RUNTIME_TESTED" = true
+          actual="$(sed -n 's/^pluginVersion=//p' gradle.properties)"
+          test "$BASE_VERSION" = "$actual" || { echo 'Requested version does not match this commit.'; exit 1; }
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- check-release-metadata
+
+  verify:
+    name: Verify Rider ${{ matrix.target }}
+    needs: approve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ['261', '262']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
+        with:
+          cache-provider: basic
+          cache-read-only: true
+          dependency-graph: disabled
+      - name: Build repository tools
+        run: dotnet build scripts/repository-tools.cs --configuration Release
+      - name: Download the checksum-pinned SDK
+        env:
+          TARGET: ${{ matrix.target }}
+        run: dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- download-rider "$TARGET" "$RUNNER_TEMP/rider-$TARGET" --github-env
+      - name: Build and verify the release candidate without secrets
+        run: bash ./gradlew --no-daemon clean releaseCheck -PriderHome="$RIDER_HOME" -PriderBuild="$RIDER_BUILD"
+      - name: Record exact candidate hashes
+        run: (cd build/distributions && sha256sum ./*.zip > SHA256SUMS)
+      - name: Upload verified candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-rd-${{ matrix.target }}
+          path: |
+            build/distributions/*.zip
+            build/distributions/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-reports-rd-${{ matrix.target }}
+          path: |
+            build/reports/
+            build/test-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    name: Upload verified Marketplace updates
+    needs: [approve, verify]
+    # Configure REQUIRED REVIEWERS and default-branch-only deployment rules first.
+    # Naming an Environment does not create those protection settings.
+    environment: marketplace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Build repository tools only
+        run: dotnet build scripts/repository-tools.cs --configuration Release
+      - name: Download the exact candidates from this workflow run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-rd-*
+          path: candidates
+      - name: Recheck both candidate hashes and descriptors before any upload
+        run: |
+          (cd candidates/release-rd-261 && sha256sum --check SHA256SUMS)
+          (cd candidates/release-rd-262 && sha256sum --check SHA256SUMS)
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip candidates/release-rd-261/*.zip 261.25134.178
+          dotnet run --file scripts/repository-tools.cs --configuration Release --no-build --no-restore -- verify-plugin-zip candidates/release-rd-262/*.zip 262.10968.170
+      - name: Upload the authorized updates using the official Marketplace API
+        env:
+          PUBLISH_TOKEN: ${{ secrets.MARKETPLACE_PUBLISH_TOKEN }}
+          MARKETPLACE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          test -n "$PUBLISH_TOKEN" || { echo 'Missing marketplace Environment secret.'; exit 1; }
+          plugin_id="$(sed -n 's/^pluginId=//p' gradle.properties)"
+          channel="$MARKETPLACE_CHANNEL"
+          if [ "$channel" = default ]; then channel=''; fi
+          # Do not retry POST automatically: an uncertain result may already be accepted.
+          for archive in candidates/release-rd-261/*.zip candidates/release-rd-262/*.zip; do
+            curl --silent --show-error --fail-with-body \
+              --header "Authorization: Bearer $PUBLISH_TOKEN" \
+              --form-string "xmlId=$plugin_id" \
+              --form "file=@$archive" \
+              --form-string "channel=$channel" \
+              https://plugins.jetbrains.com/api/updates/upload
+          done

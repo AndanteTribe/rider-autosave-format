@@ -1,0 +1,14 @@
+{
+  "261": {
+    "version": "2026.1.3",
+    "build": "261.25134.178",
+    "url": "https://download.jetbrains.com/rider/JetBrains.Rider-2026.1.3.tar.gz",
+    "sha256": "7f43eb95dffc33b5413d81d0c11441fd6ce04db4c2a6a2ceb7e0ddf5f6879136"
+  },
+  "262": {
+    "version": "2026.2.3.1",
+    "build": "262.10968.170",
+    "url": "https://download.jetbrains.com/rider/JetBrains.Rider-2026.2.3.1.tar.gz",
+    "sha256": "fa4b09a5f7cf4b6635b093adc7313991778a8dc74f25614a2b8976b04dee5d4e"
+  }
+}

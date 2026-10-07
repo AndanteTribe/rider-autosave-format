@@ -1,0 +1,26 @@
+<idea-plugin>
+    <description><![CDATA[
+        <p>Opt-in C# formatting after automatic saves in JetBrains Rider, using the built-in Reformat Code profile.</p>
+        <p>Enable formatting for each project from Tools → Enable Native Auto-save Formatting (Preview).
+        It is disabled by default for new projects. The plugin formats after the initial save, so file watchers may observe more than one write.</p>
+        <p>This preview is restricted to the exact Rider build used to compile it. Native formatting and editing interactions require manual validation before release.</p>
+    ]]></description>
+    <change-notes><![CDATA[
+        <p>Preview: preserves new saves during in-flight formatting, checks stable saved generations, and uses non-deprecated blocking read access.</p>
+        <p>Public identity and exact-build variants added. Remove or disable the previous local preview before installing.</p>
+    ]]></change-notes>
+    <idea-version strict-until-build="${riderBuild}" />
+    <depends>com.intellij.modules.rider</depends>
+    <incompatible-with>local.rider.autosave.format</incompatible-with>
+    <applicationListeners>
+        <listener class="local.rider.autosave.SaveListener"
+                  topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener" />
+    </applicationListeners>
+    <actions>
+        <action id="LocalRiderAutosave.Toggle" class="local.rider.autosave.ToggleFormattingAction"
+                text="Enable Native Auto-save Formatting (Preview)"
+                description="Enable C# auto-save formatting for this project only">
+            <add-to-group group-id="ToolsMenu" anchor="last" />
+        </action>
+    </actions>
+</idea-plugin>
